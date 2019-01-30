@@ -1,4 +1,4 @@
-#define GLFW_INCLUDE_VULKAN
+#include <vulkan/vulkan.hpp>
 #include <GLFW/glfw3.h>
 
 #define GLM_FORCE_RADIANS
@@ -7,7 +7,8 @@
 #include <glm/mat4x4.hpp>
 
 #include <iostream>
-#include <vulkan/vulkan.hpp>
+#include <fstream>
+
 
 GLFWwindow* window;
 VkSurfaceKHR surface;                                       // Surface used by window to render to
@@ -18,6 +19,12 @@ vk::Device gpu;
 vk::PresentModeKHR presMode;
 
 vk::SwapchainKHR swapChain;
+std::vector<vk::Image> swapImgs;
+std::vector<vk::ImageView> swapImgViews;
+vk::PipelineLayout pipelineLayout;
+
+const int WIDTH = 800;
+const int HEIGHT = 600;
 
 const std::vector<const char*> validationLayers = {
     "VK_LAYER_LUNARG_standard_validation"
@@ -32,12 +39,74 @@ const bool enableValidationLayers = false;
 const bool enableValidationLayers = true;
 #endif
 
-static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback( VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) {
+static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback( VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity, VkDebugUtilsMessageTypeFlagsEXT messageType, const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData, void* pUserData) 
+{
 
     std::cerr << "[VULKAN]:" << pCallbackData->pMessage << std::endl;
 
     return VK_FALSE;
-  }
+}
+
+std::vector<char> loadFileToMem(const std::string& filename)
+{
+    std::ifstream fin(filename, std::ios::ate | std::ios::binary);
+    std::vector<char> mem;
+    if (!fin.is_open())
+    {
+        std::cerr << "Unable to load file " << filename << std::endl; 
+        return mem;
+    }
+    
+    size_t fileSize = (size_t) fin.tellg();
+    mem.resize(fileSize);
+    // Go back to start & read the file
+    fin.seekg(0);   
+    fin.read(mem.data(), fileSize);
+    
+    fin.close();
+    return mem;    
+}
+  
+vk::ShaderModule createShaderModule(const std::vector<char>& data)
+{
+    vk::ShaderModuleCreateInfo sm(vk::ShaderModuleCreateFlags(), data.size(), reinterpret_cast<const uint32_t*>(data.data()));
+    return gpu.createShaderModule(sm);
+}
+  
+void createPipeline()
+{
+    auto VS = loadFileToMem("/shaders/vert.spv");
+    auto FS = loadFileToMem("/shaders/frag.spv");
+    
+    vk::ShaderModule vsm = createShaderModule(VS);
+    vk::ShaderModule fsm = createShaderModule(FS);
+    
+    vk::PipelineShaderStageCreateInfo vsStage(vk::PipelineShaderStageCreateFlags(), vk::ShaderStageFlagBits::eVertex, vsm, "main");
+    vk::PipelineShaderStageCreateInfo fsStage(vk::PipelineShaderStageCreateFlags(), vk::ShaderStageFlagBits::eFragment, fsm, "main");
+    
+    vk::PipelineVertexInputStateCreateInfo visci(vk::PipelineVertexInputStateCreateFlags());
+    vk::PipelineInputAssemblyStateCreateInfo iasci(vk::PipelineInputAssemblyStateCreateFlags(), vk::PrimitiveTopology::eTriangleList);
+    vk::Viewport viewport(0, 0, WIDTH, HEIGHT,  0,  1.0f);
+    vk::Rect2D scissors;
+    scissors.offset.x = 0;
+    scissors.offset.y = 0;
+    scissors.extent.width = WIDTH;
+    scissors.extent.height = HEIGHT;
+    vk::PipelineViewportStateCreateInfo vsci(vk::PipelineViewportStateCreateFlags(), 1, &viewport, 1, &scissors);
+    vk::PipelineRasterizationStateCreateInfo rsci(vk::PipelineRasterizationStateCreateFlags(), 0, 0, vk::PolygonMode::eFill, vk::CullModeFlagBits::eBack,vk::FrontFace::eClockwise, 0, 0, 0, 0, 1.0f);
+    // MSAA
+    vk::PipelineMultisampleStateCreateInfo msci;
+    vk::PipelineColorBlendAttachmentState cbas(1, vk::BlendFactor::eSrcAlpha, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd, vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd, vk::ColorComponentFlagBits::eR |  vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA );
+    vk::PipelineColorBlendStateCreateInfo sbsci(vk::PipelineColorBlendStateCreateFlags(), 0, vk::LogicOp::eCopy, 1, &cbas);
+    //vk::PipelineLayoutCreateInfo lci(vk::PipelineLayoutCreateFlags());
+    pipelineLayout = gpu.createPipelineLayout(vk::PipelineLayoutCreateInfo());
+    
+    
+    
+    gpu.destroy(vsm);
+    gpu.destroy(fsm);
+   
+}
 
 void VulkanStuff()
 {
@@ -210,12 +279,30 @@ void VulkanStuff()
 
         vk::SwapchainCreateInfoKHR sci(vk::SwapchainCreateFlagsKHR(), surface, surfCap.minImageCount + 1, sf.format, sf.colorSpace,surfCap.currentExtent, 1, vk::ImageUsageFlags(vk::ImageUsageFlagBits::eColorAttachment), vk::SharingMode::eExclusive, 0, nullptr, surfCap.currentTransform, vk::CompositeAlphaFlagBitsKHR::eOpaque, presMode, VK_TRUE, nullptr); 
         swapChain = gpu.createSwapchainKHR(sci);
-        std::vector<vk::Image> swapImgs = gpu.getSwapchainImagesKHR(swapChain);
+        swapImgs = gpu.getSwapchainImagesKHR(swapChain);
         for (auto & i :  swapImgs)
         {
             std::cout << "Swap Img : " << i << std::endl;
         }
         gpu.getQueue(0, 0);
+        // Create ImageViews
+        swapImgViews.resize(swapImgs.size());
+        for ( int i = 0; i < swapImgs.size(); ++i)
+        {
+            swapImgs[i];
+            vk::ImageViewCreateInfo ivci;
+            ivci.flags = vk::ImageViewCreateFlags();
+            ivci.image = swapImgs[i];
+            ivci.viewType = vk::ImageViewType::e2D;
+            ivci.format = sf.format;
+            ivci.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+            ivci.subresourceRange.levelCount = 1;
+            ivci.subresourceRange.layerCount = 1;
+            swapImgViews[i] = gpu.createImageView(ivci);
+        }
+        
+        
+        
     }
     catch(std::exception& e)
     {
@@ -233,7 +320,7 @@ int main(int argc, char **argv) {
     glfwInit();
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    window = glfwCreateWindow(800, 600, "Vulkan window", nullptr, nullptr);
+    window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan window", nullptr, nullptr);
     VulkanStuff(); 
 
 
@@ -245,6 +332,11 @@ int main(int argc, char **argv) {
         glfwPollEvents();
       }
 
+    for (auto &iv :  swapImgViews)
+    {
+        gpu.destroy(iv);
+    }    
+    gpu.destroy(pipelineLayout);
     gpu.destroy(swapChain);
     gpu.destroy();
 
