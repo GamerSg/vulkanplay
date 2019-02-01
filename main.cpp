@@ -22,6 +22,8 @@ vk::Rect2D scissors;
 vk::Queue graphicsQueue;
 
 unsigned int queueIndex, presentQueue;
+unsigned int FPS;
+double lastFrame;
 
 vk::SwapchainKHR swapChain;
 std::vector<vk::Image> swapImgs;
@@ -342,9 +344,9 @@ void VulkanStuff()
         for (auto& md :  surfPresModes)
         {
             std::cout <<  static_cast<unsigned int>(md) << std::endl;
-            if (md ==  vk::PresentModeKHR::eFifoRelaxed)
+            if (md ==  vk::PresentModeKHR::eImmediate)
             {
-                presMode = vk::PresentModeKHR::eFifoRelaxed;                
+                presMode = vk::PresentModeKHR::eImmediate;                
                 break;
             }
             presMode = md;            
@@ -413,6 +415,9 @@ void createCommandPool()
 
 void drawFrame()
 {  
+   // gpu.waitForFences(1, &cpuSyncFN[currentFrame], VK_TRUE, UINT64_MAX);
+   // gpu.resetFences(1, &cpuSyncFN[currentFrame]);
+    
     gpu.waitForFences(cpuSyncFN[currentFrame], 1, std::numeric_limits<uint64_t>::max());
     gpu.resetFences(cpuSyncFN[currentFrame]);
     
@@ -456,14 +461,19 @@ int main(int argc, char **argv) {
     glm::vec4 vec;
     auto test = matrix * vec;
     
-    int fps = 0;
     glfwSetWindowTitle(window, "Test");
     while(!glfwWindowShouldClose(window)) {
+        double now = glfwGetTime();
+        ++FPS;
+        if (now - lastFrame > 1.0f)
+        {
+            lastFrame = now;
+            std::string t = boost::lexical_cast<std::string>(FPS);
+            glfwSetWindowTitle(window, t.c_str());
+            FPS = 0;
+        }
         glfwPollEvents();
-        drawFrame();
-        std::string t = boost::lexical_cast<std::string>(fps);
-        glfwSetWindowTitle(window, t.c_str());
-        ++fps;        
+        drawFrame();      
       }
 
     gpu.waitIdle();
