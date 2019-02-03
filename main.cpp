@@ -16,6 +16,7 @@ VkSurfaceKHR surface;                                       // Surface used by w
 vk::Instance instance;
 vk::DispatchLoaderDynamic dldy;                             //Dynamic Loader for extensions
 VkDebugUtilsMessengerEXT debugMessenger;
+vk::PhysicalDevice device;
 vk::Device gpu;
 vk::PresentModeKHR presMode;
 vk::Rect2D scissors;
@@ -45,6 +46,7 @@ size_t currentFrame = 0;
 
 const int WIDTH = 800;
 const int HEIGHT = 600;
+vk::Extent2D actualExtent;                                  // Extent used currently
 const int MAX_FRAMES_IN_FLIGHT = 2;
 
 const std::vector<const char*> validationLayers = {
@@ -67,6 +69,8 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback( VkDebugUtilsMessageSeverity
 
     return VK_FALSE;
 }
+
+
 
 std::vector<char> loadFileToMem(const std::string& filename)
 {
@@ -110,12 +114,12 @@ void createPipeline()
     // VBO primitive type (almost always triangle list)
     vk::PipelineInputAssemblyStateCreateInfo iasci(vk::PipelineInputAssemblyStateCreateFlags(), vk::PrimitiveTopology::eTriangleList);
     // Viewport
-    vk::Viewport viewport(0, 0, WIDTH, HEIGHT,  0,  1.0f);
+    vk::Viewport viewport(0, 0, actualExtent.width, actualExtent.height,  0,  1.0f);
     
     scissors.offset.x = 0;
     scissors.offset.y = 0;
-    scissors.extent.width = WIDTH;
-    scissors.extent.height = HEIGHT;
+    scissors.extent.width = actualExtent.width;
+    scissors.extent.height = actualExtent.height;
     vk::PipelineViewportStateCreateInfo vsci(vk::PipelineViewportStateCreateFlags(), 1, &viewport, 1, &scissors);
     // Rasterization (Back face culling,  front face triangle order, fill mode or wireframe, etc..)
     vk::PipelineRasterizationStateCreateInfo rsci(vk::PipelineRasterizationStateCreateFlags(), 0, 0, vk::PolygonMode::eFill, vk::CullModeFlagBits::eBack,vk::FrontFace::eClockwise, 0, 0, 0, 0, 1.0f);
@@ -176,11 +180,133 @@ void createFrameBuffers()
         vk::ImageView attch[] = {
             swapImgViews[i]
         };
-        vk::FramebufferCreateInfo fbci(vk::FramebufferCreateFlags(), renderPass, 1, attch, WIDTH, HEIGHT, 1);
+        vk::FramebufferCreateInfo fbci(vk::FramebufferCreateFlags(), renderPass, 1, attch, actualExtent.width, actualExtent.height, 1);
         frameBuffers[i] = gpu.createFramebuffer(fbci);
         
     }
 }
+
+void createSwapChain()
+{
+    // Create Swapchain
+         std::cout << "Surface props" << std::endl;
+        std::cout << "-----------------" << std::endl;
+
+        auto surfCap = device.getSurfaceCapabilitiesKHR(surface);
+        auto surfFormats = device.getSurfaceFormatsKHR(surface);
+        auto surfPresModes = device.getSurfacePresentModesKHR(surface);        
+
+        std::cout<< "Surface Cap : " << surfCap.maxImageExtent.width << "X" << surfCap.maxImageExtent.height << std::endl;
+        std::cout << "Surface images " << surfCap.minImageCount << " - " << surfCap.maxImageCount << std::endl;
+        if (surfFormats.size() ==  1 && static_cast<VkFormat>(surfFormats[0].format) == VK_FORMAT_UNDEFINED)
+        {
+            sf.format = vk::Format::eB8G8R8A8Unorm; 
+            sf.colorSpace = vk::ColorSpaceKHR::eVkColorspaceSrgbNonlinear;
+        // Use default
+        }
+        else
+        {
+            for (auto& fmt :  surfFormats)
+            {
+                std::cout<< static_cast<unsigned int>(fmt.format) << " " <<  static_cast<unsigned int>(fmt.colorSpace) << std::endl;
+            }
+            sf = surfFormats[0];
+        }
+        std::cout << "VSync Modes\n";
+        for (auto& md :  surfPresModes)
+        {
+            std::cout <<  static_cast<unsigned int>(md) << std::endl;
+            if (md ==  vk::PresentModeKHR::eImmediate)
+            {
+                presMode = vk::PresentModeKHR::eImmediate;                
+                break;
+            }
+            presMode = md;            
+        }
+
+        vk::SwapchainCreateInfoKHR sci(vk::SwapchainCreateFlagsKHR(), surface, surfCap.minImageCount + 1, sf.format, sf.colorSpace,surfCap.currentExtent, 1, vk::ImageUsageFlags(vk::ImageUsageFlagBits::eColorAttachment), vk::SharingMode::eExclusive, 0, nullptr, surfCap.currentTransform, vk::CompositeAlphaFlagBitsKHR::eOpaque, presMode, VK_TRUE, nullptr); 
+        actualExtent = surfCap.currentExtent;
+        swapChain = gpu.createSwapchainKHR(sci);
+        swapImgs = gpu.getSwapchainImagesKHR(swapChain);
+        std::cout << "Swap images size : " << swapImgs.size() << std::endl;
+        for (auto & i :  swapImgs)
+        {
+            std::cout << "Swap Img : " << i << std::endl;
+        }
+        graphicsQueue = gpu.getQueue(0, 0);
+        // Create ImageViews
+        swapImgViews.resize(swapImgs.size());
+        for ( int i = 0; i < swapImgs.size(); ++i)
+        {
+            swapImgs[i];
+            vk::ImageViewCreateInfo ivci;
+            ivci.flags = vk::ImageViewCreateFlags();
+            ivci.image = swapImgs[i];
+            ivci.viewType = vk::ImageViewType::e2D;
+            ivci.format = sf.format;
+            ivci.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+            ivci.subresourceRange.levelCount = 1;
+            ivci.subresourceRange.layerCount = 1;
+            swapImgViews[i] = gpu.createImageView(ivci);
+        }
+        
+}
+
+void cleanUpSwapChain()
+{
+    for (auto & fb :  frameBuffers) 
+    {
+        gpu.destroy(fb);
+    }
+    for (auto &iv :  swapImgViews)
+    {
+        gpu.destroy(iv);
+    }     
+    gpu.destroy(renderPass);
+    gpu.destroy(graphicsPipeline);
+    gpu.destroy(pipelineLayout);
+    gpu.destroy(swapChain);
+
+}
+
+
+void createCommandBuffers()
+{ 
+    vk::CommandBufferAllocateInfo cbai(commandPool, vk::CommandBufferLevel::ePrimary, frameBuffers.size());
+    commandBuffers = gpu.allocateCommandBuffers(cbai);
+    for (int i = 0; i < commandBuffers.size(); ++i)
+    {
+        vk::CommandBufferBeginInfo cbbi(vk::CommandBufferUsageFlagBits::eSimultaneousUse);
+        commandBuffers[i].begin(cbbi);                      // Begin Recording
+        std::array<float, 4> bgColor = {0.0f, 0.0f, 0.0f, 0.4f};        
+        vk::ClearValue cv(bgColor);
+        
+        vk::RenderPassBeginInfo rpbi(renderPass, frameBuffers[i], scissors, 1, &cv);
+        commandBuffers[i].beginRenderPass(rpbi, vk::SubpassContents::eInline);          // Begin Render Pass        
+        //Bind our painstakingly created pipeline
+        commandBuffers[i].bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline); 
+        commandBuffers[i].draw(3, 1, 0, 0);
+        commandBuffers[i].endRenderPass();
+        commandBuffers[i].end();
+        
+    }
+    
+    
+}
+
+void recreateSwapChain()
+{
+    gpu.waitIdle();
+    
+    cleanUpSwapChain();
+    
+    createSwapChain();
+    createRenderPass();
+    createPipeline();
+    createFrameBuffers();
+    createCommandBuffers();    
+}
+
 
 void VulkanStuff()
 {
@@ -257,7 +383,7 @@ void VulkanStuff()
         std::cout << "=======================" << std::endl;
         // Physical Devices
         auto physicalDevices = instance.enumeratePhysicalDevices();
-        vk::PhysicalDevice& device = physicalDevices[0];
+        device = physicalDevices[0];
 
         queueIndex = 0;
         presentQueue = 0;
@@ -314,70 +440,12 @@ void VulkanStuff()
         vk::DeviceQueueCreateInfo dqci(vk::DeviceQueueCreateFlags(), queueIndex, 1, &priority);
         vk::DeviceCreateInfo dci(vk::DeviceCreateFlags(), 1,  &dqci, validationLayers.size(), validationLayers.data(), devEXTsNeeded.size(), devEXTsNeeded.data());
 
-        gpu = device.createDevice(dci);         
+        gpu = device.createDevice(dci);  
         
-        // Create Swapchain
-         std::cout << "Surface props" << std::endl;
-        std::cout << "-----------------" << std::endl;
-
-        auto surfCap = device.getSurfaceCapabilitiesKHR(surface);
-        auto surfFormats = device.getSurfaceFormatsKHR(surface);
-        auto surfPresModes = device.getSurfacePresentModesKHR(surface);        
-
-        std::cout<< "Surface Cap : " << surfCap.maxImageExtent.width << "X" << surfCap.maxImageExtent.height << std::endl;
-        std::cout << "Surface images " << surfCap.minImageCount << " - " << surfCap.maxImageCount << std::endl;
-        if (surfFormats.size() ==  1 && static_cast<VkFormat>(surfFormats[0].format) == VK_FORMAT_UNDEFINED)
-        {
-            sf.format = vk::Format::eB8G8R8A8Unorm; 
-            sf.colorSpace = vk::ColorSpaceKHR::eVkColorspaceSrgbNonlinear;
-        // Use default
-        }
-        else
-        {
-            for (auto& fmt :  surfFormats)
-            {
-                std::cout<< static_cast<unsigned int>(fmt.format) << " " <<  static_cast<unsigned int>(fmt.colorSpace) << std::endl;
-            }
-            sf = surfFormats[0];
-        }
-        std::cout << "VSync Modes\n";
-        for (auto& md :  surfPresModes)
-        {
-            std::cout <<  static_cast<unsigned int>(md) << std::endl;
-            if (md ==  vk::PresentModeKHR::eImmediate)
-            {
-                presMode = vk::PresentModeKHR::eImmediate;                
-                break;
-            }
-            presMode = md;            
-        }
-
-        vk::SwapchainCreateInfoKHR sci(vk::SwapchainCreateFlagsKHR(), surface, surfCap.minImageCount + 1, sf.format, sf.colorSpace,surfCap.currentExtent, 1, vk::ImageUsageFlags(vk::ImageUsageFlagBits::eColorAttachment), vk::SharingMode::eExclusive, 0, nullptr, surfCap.currentTransform, vk::CompositeAlphaFlagBitsKHR::eOpaque, presMode, VK_TRUE, nullptr); 
-        swapChain = gpu.createSwapchainKHR(sci);
-        swapImgs = gpu.getSwapchainImagesKHR(swapChain);
-        std::cout << "Swap images size : " << swapImgs.size() << std::endl;
-        for (auto & i :  swapImgs)
-        {
-            std::cout << "Swap Img : " << i << std::endl;
-        }
-        graphicsQueue = gpu.getQueue(0, 0);
-        // Create ImageViews
-        swapImgViews.resize(swapImgs.size());
-        for ( int i = 0; i < swapImgs.size(); ++i)
-        {
-            swapImgs[i];
-            vk::ImageViewCreateInfo ivci;
-            ivci.flags = vk::ImageViewCreateFlags();
-            ivci.image = swapImgs[i];
-            ivci.viewType = vk::ImageViewType::e2D;
-            ivci.format = sf.format;
-            ivci.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-            ivci.subresourceRange.levelCount = 1;
-            ivci.subresourceRange.layerCount = 1;
-            swapImgViews[i] = gpu.createImageView(ivci);
-        }
+        vk::CommandPoolCreateInfo cpci(vk::CommandPoolCreateFlags(), queueIndex);
+        commandPool = gpu.createCommandPool(cpci);
         
-        
+        createSwapChain();
         
     }
     catch(std::exception& e)
@@ -386,51 +454,37 @@ void VulkanStuff()
     }
 }
 
-void createCommandPool()
-{
-    vk::CommandPoolCreateInfo cpci(vk::CommandPoolCreateFlags(), queueIndex);
-    commandPool = gpu.createCommandPool(cpci);
-        
-    vk::CommandBufferAllocateInfo cbai(commandPool, vk::CommandBufferLevel::ePrimary, frameBuffers.size());
-    commandBuffers = gpu.allocateCommandBuffers(cbai);
-    for (int i = 0; i < commandBuffers.size(); ++i)
-    {
-        vk::CommandBufferBeginInfo cbbi(vk::CommandBufferUsageFlagBits::eSimultaneousUse);
-        commandBuffers[i].begin(cbbi);                      // Begin Recording
-        std::array<float, 4> bgColor = {0.0f, 0.0f, 0.0f, 0.4f};        
-        vk::ClearValue cv(bgColor);
-        
-        vk::RenderPassBeginInfo rpbi(renderPass, frameBuffers[i], scissors, 1, &cv);
-        commandBuffers[i].beginRenderPass(rpbi, vk::SubpassContents::eInline);          // Begin Render Pass        
-        //Bind our painstakingly created pipeline
-        commandBuffers[i].bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline); 
-        commandBuffers[i].draw(3, 1, 0, 0);
-        commandBuffers[i].endRenderPass();
-        commandBuffers[i].end();
-        
-    }
-    
-    
-}
 
 void drawFrame()
 {  
-   // gpu.waitForFences(1, &cpuSyncFN[currentFrame], VK_TRUE, UINT64_MAX);
-   // gpu.resetFences(1, &cpuSyncFN[currentFrame]);
+    try
+    {
+        //graphicsQueue.waitIdle();     //30% slower vs fences method below due to pipelining via fences (next frame can be sent and begin render while waiting)
+        gpu.waitForFences(cpuSyncFN[currentFrame], 1, std::numeric_limits<uint64_t>::max());    
+        // Reset after potential resize(recreateSwapChain) operation to prevent stall
+        gpu.resetFences(cpuSyncFN[currentFrame]);
+        
+        auto fbIndex = gpu.acquireNextImageKHR(swapChain, std::numeric_limits<uint64_t>::max(), imgAvlblSMPH[currentFrame], nullptr);
     
-    gpu.waitForFences(cpuSyncFN[currentFrame], 1, std::numeric_limits<uint64_t>::max());
-    gpu.resetFences(cpuSyncFN[currentFrame]);
-    
-    auto fbIndex = gpu.acquireNextImageKHR(swapChain, std::numeric_limits<uint64_t>::max(), imgAvlblSMPH[currentFrame], nullptr);
-    vk::PipelineStageFlags waitAt[] = {vk::PipelineStageFlagBits::eColorAttachmentOutput};
-    vk::SubmitInfo si(1, &imgAvlblSMPH[currentFrame], waitAt, 1, &commandBuffers[fbIndex.value],1, &renderFinishSMPH[currentFrame]);
-   std::vector<vk::SubmitInfo> subs;
-    subs.push_back(si);
-    graphicsQueue.submit(si, cpuSyncFN[currentFrame]);
-    
-    vk::PresentInfoKHR pi(1, &renderFinishSMPH[currentFrame], 1, &swapChain, &fbIndex.value);
-    graphicsQueue.presentKHR(pi);
-    currentFrame = (currentFrame + 1) %  MAX_FRAMES_IN_FLIGHT;
+        vk::PipelineStageFlags waitAt[] = {vk::PipelineStageFlagBits::eColorAttachmentOutput};
+        vk::SubmitInfo si(1, &imgAvlblSMPH[currentFrame], waitAt, 1, &commandBuffers[fbIndex.value],1, &renderFinishSMPH[currentFrame]);
+        std::vector<vk::SubmitInfo> subs;
+        subs.push_back(si);
+        graphicsQueue.submit(si, cpuSyncFN[currentFrame]);
+        
+        vk::PresentInfoKHR pi(1, &renderFinishSMPH[currentFrame], 1, &swapChain, &fbIndex.value);
+        auto presResult = graphicsQueue.presentKHR(pi);
+        currentFrame = (currentFrame + 1) %  MAX_FRAMES_IN_FLIGHT;
+    }
+    catch (vk::SystemError& err)
+    {
+        if (err.code() ==  vk::Result::eErrorOutOfDateKHR)
+        {    // Check for resize
+            std::cerr << "Resized! " << err.what() <<  std::endl;            
+            recreateSwapChain();            
+            return;
+        }
+    }
 }
 
 void createSemaphores()
@@ -454,7 +508,7 @@ int main(int argc, char **argv) {
     createRenderPass();
     createPipeline();
     createFrameBuffers();
-    createCommandPool();
+    createCommandBuffers();
     createSemaphores();
 
     glm::mat4 matrix;
@@ -477,25 +531,14 @@ int main(int argc, char **argv) {
       }
 
     gpu.waitIdle();
-    gpu.destroy(commandPool);
-    for (auto & fb :  frameBuffers) 
-    {
-        gpu.destroy(fb);
-    }
-    for (auto &iv :  swapImgViews)
-    {
-        gpu.destroy(iv);
-    }     
-    gpu.destroy(renderPass);
-    gpu.destroy(graphicsPipeline);
-    gpu.destroy(pipelineLayout);
-    gpu.destroy(swapChain);
+    cleanUpSwapChain();
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
     {
         gpu.destroy(imgAvlblSMPH[i]);
         gpu.destroy(renderFinishSMPH[i]);
         gpu.destroy(cpuSyncFN[i]);
     }
+    gpu.destroy(commandPool);
     gpu.destroy();
 
     instance.destroySurfaceKHR(surface);
