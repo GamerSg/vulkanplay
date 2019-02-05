@@ -114,7 +114,7 @@ void createPipeline()
     // VBO primitive type (almost always triangle list)
     vk::PipelineInputAssemblyStateCreateInfo iasci(vk::PipelineInputAssemblyStateCreateFlags(), vk::PrimitiveTopology::eTriangleList);
     // Viewport
-    vk::Viewport viewport(0, 0, actualExtent.width, actualExtent.height,  0,  1.0f);
+    vk::Viewport viewport(0, 0, actualExtent.width, actualExtent.height,  0.0f,  1.0f);
     
     scissors.offset.x = 0;
     scissors.offset.y = 0;
@@ -542,7 +542,10 @@ int main(int argc, char **argv) {
     gpu.destroy();
 
     instance.destroySurfaceKHR(surface);
-    instance.destroyDebugUtilsMessengerEXT(debugMessenger, nullptr, dldy);
+	if (enableValidationLayers)
+	{
+		instance.destroyDebugUtilsMessengerEXT(debugMessenger, nullptr, dldy);
+	}
     instance.destroy();
     glfwDestroyWindow(window);
 
