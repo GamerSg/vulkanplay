@@ -1,5 +1,8 @@
+#Win32 check, set policy to 3.12 to allow finding BOOST directory from environment variable
+if(WIN32)
 cmake_minimum_required(VERSION 3.12)
 cmake_policy(VERSION 3.12)
+endif()
 project(vulkanplay)
 find_package(Vulkan REQUIRED)
 find_package(Boost REQUIRED)

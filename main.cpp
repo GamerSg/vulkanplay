@@ -30,6 +30,7 @@ vk::SwapchainKHR swapChain;
 std::vector<vk::Image> swapImgs;
 std::vector<vk::ImageView> swapImgViews;
 std::vector<vk::Framebuffer> frameBuffers;
+vk::Buffer VBO;
 
 vk::RenderPass renderPass;
 vk::PipelineLayout pipelineLayout;
@@ -70,7 +71,37 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback( VkDebugUtilsMessageSeverity
     return VK_FALSE;
 }
 
+struct Vertex {
+    glm::vec2 pos;
+    glm::vec3 color;
+    
+    static vk::VertexInputBindingDescription getBindingDescription() {
+        vk::VertexInputBindingDescription bindingDescription(0, sizeof(Vertex), vk::VertexInputRate::eVertex);     
 
+        return bindingDescription;
+    }
+    static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions() {
+    std::array<vk::VertexInputAttributeDescription, 2> attributeDescriptions = {};
+    
+    attributeDescriptions[0].binding = 0;
+    attributeDescriptions[0].location = 0;
+    attributeDescriptions[0].format = vk::Format::eR32G32Sfloat;
+    attributeDescriptions[0].offset = offsetof(Vertex, pos);
+    
+    attributeDescriptions[1].binding = 0;
+    attributeDescriptions[1].location = 1;
+    attributeDescriptions[1].format = vk::Format::eR32G32B32Sfloat;
+    attributeDescriptions[1].offset = offsetof(Vertex, color);
+
+    return attributeDescriptions;
+    }
+};
+
+const std::vector<Vertex> vertices = {
+    {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+};
 
 std::vector<char> loadFileToMem(const std::string& filename)
 {
@@ -97,6 +128,14 @@ vk::ShaderModule createShaderModule(const std::vector<char>& data)
     vk::ShaderModuleCreateInfo sm(vk::ShaderModuleCreateFlags(), data.size(), reinterpret_cast<const uint32_t*>(data.data()));
     return gpu.createShaderModule(sm);
 }
+
+void createVertexBuffer()
+{
+    vk::BufferCreateInfo bci(vk::BufferCreateFlags(), sizeof(vertices[0]) * vertices.size(), vk::BufferUsageFlagBits::eVertexBuffer, vk::SharingMode::eExclusive);
+    VBO = gpu.createBuffer(bci);
+    
+    
+}
   
 void createPipeline()
 {
@@ -111,6 +150,13 @@ void createPipeline()
     vk::PipelineShaderStageCreateInfo stages[] = {vsStage, fsStage};
     
     vk::PipelineVertexInputStateCreateInfo visci;    
+    auto vertexBindingDesc = Vertex::getBindingDescription();
+    auto vertexInputAttrDesc = Vertex::getAttributeDescriptions();
+    visci.setVertexBindingDescriptionCount(1);
+    visci.setPVertexBindingDescriptions(&vertexBindingDesc);
+    visci.setVertexAttributeDescriptionCount(2);
+    visci.setPVertexAttributeDescriptions(&vertexInputAttrDesc[0]);
+    
     // VBO primitive type (almost always triangle list)
     vk::PipelineInputAssemblyStateCreateInfo iasci(vk::PipelineInputAssemblyStateCreateFlags(), vk::PrimitiveTopology::eTriangleList);
     // Viewport
@@ -508,6 +554,7 @@ int main(int argc, char **argv) {
     createRenderPass();
     createPipeline();
     createFrameBuffers();
+    createVertexBuffer();
     createCommandBuffers();
     createSemaphores();
 
@@ -532,6 +579,7 @@ int main(int argc, char **argv) {
 
     gpu.waitIdle();
     cleanUpSwapChain();
+    gpu.destroy(VBO);
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
     {
         gpu.destroy(imgAvlblSMPH[i]);
