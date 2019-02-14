@@ -6,6 +6,7 @@
 #include <glm/vec4.hpp>
 #include <glm/mat4x4.hpp>
 
+#include <bitset>
 #include <iostream>
 #include <fstream>
 #include <boost/lexical_cast.hpp>
@@ -31,6 +32,7 @@ std::vector<vk::Image> swapImgs;
 std::vector<vk::ImageView> swapImgViews;
 std::vector<vk::Framebuffer> frameBuffers;
 vk::Buffer VBO;
+vk::DeviceMemory devMem;
 
 vk::RenderPass renderPass;
 vk::PipelineLayout pipelineLayout;
@@ -98,7 +100,7 @@ struct Vertex {
 };
 
 const std::vector<Vertex> vertices = {
-    {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+    {{0.0f, -0.5f}, {1.0f, 1.0f, 0.0f}},
     {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
     {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
 };
@@ -129,14 +131,86 @@ vk::ShaderModule createShaderModule(const std::vector<char>& data)
     return gpu.createShaderModule(sm);
 }
 
-void createVertexBuffer()
-{
-    vk::BufferCreateInfo bci(vk::BufferCreateFlags(), sizeof(vertices[0]) * vertices.size(), vk::BufferUsageFlagBits::eVertexBuffer, vk::SharingMode::eExclusive);
-    VBO = gpu.createBuffer(bci);
+//@{
+//typeFilter -> What VBO needs
+// properties -> What app needs
+//@}
+uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties) {
+
+    vk::PhysicalDeviceMemoryProperties pdmp = device.getMemoryProperties();
+    std::cout << "Mem type needed : " << typeFilter << " " << std::bitset<16>(typeFilter) << std::endl;
+    std::cout << "Mem Types : " << pdmp.memoryTypeCount << " Mem Heaps: " << pdmp.memoryHeapCount << std::endl;
     
+    for (uint32_t i = 0; i < pdmp.memoryTypeCount; i++) 
+    {
+        if ((typeFilter & (1 << i)) && (pdmp.memoryTypes[i].propertyFlags & properties) & properties) 
+        {
+            std::cout << "Found " << i << " " << std::bitset<16>(1 << i) << std::endl;
+            return i;
+        }
+    }
+    throw std::runtime_error("Unable to find memory type");
+}
+
+void createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags memProperties, vk::Buffer& buffer,  vk::DeviceMemory& deviceMem)
+{
+    vk::BufferCreateInfo bci(vk::BufferCreateFlags(), size, usage, vk::SharingMode::eExclusive);
+    buffer = gpu.createBuffer(bci);
+    // Find out real memory requirements from GPU
+    vk::MemoryRequirements mreq = gpu.getBufferMemoryRequirements(buffer);
+    // Prepare allocation
+    vk::MemoryAllocateInfo mai(mreq.size);
+    // Find and assign a memory type that VBO requires as well as has host(CPU) access
+    mai.setMemoryTypeIndex( findMemoryType(mreq.memoryTypeBits, memProperties) );
+    // Allocate it
+    deviceMem = gpu.allocateMemory(mai);
+    // Bind VBO to allocated memory
+    gpu.bindBufferMemory(buffer, deviceMem, 0);      
+  
+}
+
+void copyBuffer(vk::Buffer src,  vk::Buffer dst,  vk::DeviceSize size)
+{
+    vk::CommandBufferAllocateInfo cbai(commandPool, vk::CommandBufferLevel::ePrimary, 1);    
+    std::vector<vk::CommandBuffer> transferCmdBuffers = gpu.allocateCommandBuffers(cbai);
+    vk::CommandBuffer& transferCmdBuffer = transferCmdBuffers[0];
+    
+    vk::CommandBufferBeginInfo cbbi(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+    transferCmdBuffer.begin(cbbi);
+    vk::BufferCopy bc(0, 0, size);    
+    std::array<vk::BufferCopy, 1> bcRegions=  {bc};
+    transferCmdBuffer.copyBuffer(src, dst, bcRegions);
+    transferCmdBuffer.end();
+    
+    vk::SubmitInfo si;
+    si.setCommandBufferCount(1);
+    si.setPCommandBuffers(&transferCmdBuffer);
+    std::array<vk::SubmitInfo, 1> siArr = {si};
+    graphicsQueue.submit(siArr, nullptr);
+    graphicsQueue.waitIdle();
+    gpu.freeCommandBuffers(commandPool, 1, &transferCmdBuffer);    
     
 }
-  
+
+void createVertexBuffer()
+{
+    vk::Buffer stagingBuffer;
+    vk::DeviceMemory stagingMem;
+    size_t size = sizeof(Vertex) * vertices.size();
+    createBuffer(size, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible |  vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer, stagingMem);
+    createBuffer(size, vk::BufferUsageFlagBits::eVertexBuffer |  vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, VBO, devMem);
+    
+    // Copy triangle to staging
+    void* vboMem = gpu.mapMemory(stagingMem, 0, size);
+    memcpy(vboMem, vertices.data(), size);
+    gpu.unmapMemory(stagingMem);
+    
+    copyBuffer(stagingBuffer, VBO, size);
+    gpu.destroy(stagingBuffer);
+    gpu.freeMemory(stagingMem);
+}
+
+
 void createPipeline()
 {
     auto VS = loadFileToMem("./shaders/vert.spv");
@@ -331,7 +405,10 @@ void createCommandBuffers()
         commandBuffers[i].beginRenderPass(rpbi, vk::SubpassContents::eInline);          // Begin Render Pass        
         //Bind our painstakingly created pipeline
         commandBuffers[i].bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline); 
-        commandBuffers[i].draw(3, 1, 0, 0);
+        std::array<vk::Buffer, 1> vbos = {VBO};
+        std::array<vk::DeviceSize, 1> offs = {0};
+        commandBuffers[i].bindVertexBuffers(0, vbos, offs);
+        commandBuffers[i].draw(vertices.size(), 1, 0, 0);
         commandBuffers[i].endRenderPass();
         commandBuffers[i].end();
         
@@ -557,11 +634,7 @@ int main(int argc, char **argv) {
     createVertexBuffer();
     createCommandBuffers();
     createSemaphores();
-
-    glm::mat4 matrix;
-    glm::vec4 vec;
-    auto test = matrix * vec;
-    
+        
     glfwSetWindowTitle(window, "Test");
     while(!glfwWindowShouldClose(window)) {
         double now = glfwGetTime();
@@ -580,6 +653,7 @@ int main(int argc, char **argv) {
     gpu.waitIdle();
     cleanUpSwapChain();
     gpu.destroy(VBO);
+    gpu.freeMemory(devMem);
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
     {
         gpu.destroy(imgAvlblSMPH[i]);
