@@ -33,6 +33,8 @@ std::vector<vk::ImageView> swapImgViews;
 std::vector<vk::Framebuffer> frameBuffers;
 vk::Buffer VBO;
 vk::DeviceMemory devMem;
+vk::Buffer IndicesBuffer;
+vk::DeviceMemory indMem;
 
 vk::RenderPass renderPass;
 vk::PipelineLayout pipelineLayout;
@@ -100,9 +102,14 @@ struct Vertex {
 };
 
 const std::vector<Vertex> vertices = {
-    {{0.0f, -0.5f}, {1.0f, 1.0f, 0.0f}},
+    {{-0.5f, -0.5f}, {1.0f, 1.0f, 0.0f}},
     {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}, 
+    {{0.5f, -0.5f}, {1.0f, 1.0f, 0.0f}} 
+};
+
+const std::vector<uint16_t> indices = {
+  0, 1, 2, 0, 3, 1
 };
 
 std::vector<char> loadFileToMem(const std::string& filename)
@@ -209,6 +216,25 @@ void createVertexBuffer()
     gpu.destroy(stagingBuffer);
     gpu.freeMemory(stagingMem);
 }
+
+void createIndexBuffer()
+{
+    vk::Buffer stagingBuffer;
+    vk::DeviceMemory stagingMem;
+    size_t size = sizeof(uint16_t) * indices.size();
+    createBuffer(size, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible |  vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer, stagingMem);
+    createBuffer(size, vk::BufferUsageFlagBits::eIndexBuffer |  vk::BufferUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, IndicesBuffer, indMem);
+    
+    // Copy triangle to staging
+    void* Mem = gpu.mapMemory(stagingMem, 0, size);
+    memcpy(Mem, indices.data(), size);
+    gpu.unmapMemory(stagingMem);
+    
+    copyBuffer(stagingBuffer, IndicesBuffer, size);
+    gpu.destroy(stagingBuffer);
+    gpu.freeMemory(stagingMem);
+}
+
 
 
 void createPipeline()
@@ -408,7 +434,8 @@ void createCommandBuffers()
         std::array<vk::Buffer, 1> vbos = {VBO};
         std::array<vk::DeviceSize, 1> offs = {0};
         commandBuffers[i].bindVertexBuffers(0, vbos, offs);
-        commandBuffers[i].draw(vertices.size(), 1, 0, 0);
+        commandBuffers[i].bindIndexBuffer(IndicesBuffer, 0, vk::IndexType::eUint16);
+        commandBuffers[i].drawIndexed(indices.size(), 1, 0, 0, 0);
         commandBuffers[i].endRenderPass();
         commandBuffers[i].end();
         
@@ -632,6 +659,7 @@ int main(int argc, char **argv) {
     createPipeline();
     createFrameBuffers();
     createVertexBuffer();
+    createIndexBuffer();
     createCommandBuffers();
     createSemaphores();
         
@@ -653,7 +681,9 @@ int main(int argc, char **argv) {
     gpu.waitIdle();
     cleanUpSwapChain();
     gpu.destroy(VBO);
+    gpu.destroy(IndicesBuffer);
     gpu.freeMemory(devMem);
+    gpu.freeMemory(indMem);
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
     {
         gpu.destroy(imgAvlblSMPH[i]);
