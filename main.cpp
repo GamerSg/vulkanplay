@@ -3,9 +3,12 @@
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include <glm/glm.hpp>
 #include <glm/vec4.hpp>
 #include <glm/mat4x4.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
+#include <chrono>
 #include <bitset>
 #include <iostream>
 #include <fstream>
@@ -31,10 +34,18 @@ vk::SwapchainKHR swapChain;
 std::vector<vk::Image> swapImgs;
 std::vector<vk::ImageView> swapImgViews;
 std::vector<vk::Framebuffer> frameBuffers;
+
 vk::Buffer VBO;
 vk::DeviceMemory devMem;
 vk::Buffer IndicesBuffer;
 vk::DeviceMemory indMem;
+// Multiple for each frame
+std::vector<vk::Buffer> uniformBuffer;
+std::vector<vk::DeviceMemory> uboMem;
+
+vk::DescriptorPool descPool;
+vk::DescriptorSetLayout descSetLayout;
+std::vector<vk::DescriptorSet> descSets;
 
 vk::RenderPass renderPass;
 vk::PipelineLayout pipelineLayout;
@@ -99,6 +110,12 @@ struct Vertex {
 
     return attributeDescriptions;
     }
+};
+
+struct UniformBufferObject {    
+    glm::mat4 model;
+    glm::mat4 view;
+    glm::mat4 proj;    
 };
 
 const std::vector<Vertex> vertices = {
@@ -199,6 +216,19 @@ void copyBuffer(vk::Buffer src,  vk::Buffer dst,  vk::DeviceSize size)
     
 }
 
+
+void createUniformBuffers()
+{
+    vk::DeviceSize size = sizeof(UniformBufferObject);
+    uniformBuffer.resize(swapImgs.size());
+    uboMem.resize(swapImgs.size());
+    
+    for (int i = 0; i < uniformBuffer.size(); ++i)
+    {
+        createBuffer(size, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible |  vk::MemoryPropertyFlagBits::eHostCoherent, uniformBuffer[i], uboMem[i]);
+    }
+}
+
 void createVertexBuffer()
 {
     vk::Buffer stagingBuffer;
@@ -235,7 +265,14 @@ void createIndexBuffer()
     gpu.freeMemory(stagingMem);
 }
 
-
+void createDescriptorSetLayout()
+{
+    vk::DescriptorSetLayoutBinding dslb(0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex);
+    vk::DescriptorSetLayoutCreateInfo dslci;
+    dslci.setBindingCount(1);
+    dslci.setPBindings(&dslb);
+    descSetLayout = gpu.createDescriptorSetLayout(dslci);    
+}
 
 void createPipeline()
 {
@@ -275,7 +312,10 @@ void createPipeline()
     vk::PipelineColorBlendAttachmentState cbas(1, vk::BlendFactor::eSrcAlpha, vk::BlendFactor::eOneMinusSrcAlpha, vk::BlendOp::eAdd, vk::BlendFactor::eOne, vk::BlendFactor::eZero, vk::BlendOp::eAdd, vk::ColorComponentFlagBits::eR |  vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA );
     vk::PipelineColorBlendStateCreateInfo sbsci(vk::PipelineColorBlendStateCreateFlags(), 0, vk::LogicOp::eCopy, 1, &cbas);
     // For setting uniform/constant variables for shaders
-    pipelineLayout = gpu.createPipelineLayout(vk::PipelineLayoutCreateInfo());
+    vk::PipelineLayoutCreateInfo plci;
+    plci.setSetLayoutCount(1);
+    plci.setPSetLayouts(&descSetLayout);   
+    pipelineLayout = gpu.createPipelineLayout(plci);
     // Finally create pipeline and link it all together
     vk::GraphicsPipelineCreateInfo gpci;
     gpci.setStageCount(2);
@@ -410,7 +450,7 @@ void cleanUpSwapChain()
     }     
     gpu.destroy(renderPass);
     gpu.destroy(graphicsPipeline);
-    gpu.destroy(pipelineLayout);
+    gpu.destroy(pipelineLayout);    
     gpu.destroy(swapChain);
 
 }
@@ -433,8 +473,11 @@ void createCommandBuffers()
         commandBuffers[i].bindPipeline(vk::PipelineBindPoint::eGraphics, graphicsPipeline); 
         std::array<vk::Buffer, 1> vbos = {VBO};
         std::array<vk::DeviceSize, 1> offs = {0};
+        std::array<vk::DescriptorSet, 1> dsArr = {descSets[i]};
+        
         commandBuffers[i].bindVertexBuffers(0, vbos, offs);
         commandBuffers[i].bindIndexBuffer(IndicesBuffer, 0, vk::IndexType::eUint16);
+        commandBuffers[i].bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, dsArr, nullptr);
         commandBuffers[i].drawIndexed(indices.size(), 1, 0, 0, 0);
         commandBuffers[i].endRenderPass();
         commandBuffers[i].end();
@@ -604,6 +647,49 @@ void VulkanStuff()
     }
 }
 
+void createDescriptorPool()
+{
+    vk::DescriptorPoolSize dps(vk::DescriptorType::eUniformBuffer, swapImgs.size());
+    vk::DescriptorPoolCreateInfo dpci;
+    dpci.setPoolSizeCount(1);
+    dpci.setPPoolSizes(&dps);
+    dpci.setMaxSets(swapImgs.size());
+    
+    descPool = gpu.createDescriptorPool(dpci);
+    
+}
+
+void createDescriptorSets()
+{
+    std::vector<vk::DescriptorSetLayout> layouts(swapImgs.size(), descSetLayout);
+    vk::DescriptorSetAllocateInfo dsai(descPool, swapImgs.size(), layouts.data());
+    
+    descSets.resize(swapImgs.size());
+    descSets = gpu.allocateDescriptorSets(dsai);
+    
+    for (int i = 0; i < descSets.size(); ++i)
+    {
+            vk::DescriptorBufferInfo dbi(uniformBuffer[i], 0,  sizeof(UniformBufferObject));
+            vk::WriteDescriptorSet wds(descSets[i], 0, 0, 1, vk::DescriptorType::eUniformBuffer, nullptr, &dbi, nullptr);
+            std::array<vk::WriteDescriptorSet, 1> writeDescArr=  {wds};
+            gpu.updateDescriptorSets(writeDescArr, nullptr);
+    }
+}
+
+void updateUniformData(uint32_t currImg)
+{
+        UniformBufferObject ubo;
+        static int rotateAngle = 0;
+        ubo.model = glm::rotate(glm::identity<glm::mat4>(), glm::radians(rotateAngle * 0.01f), glm::vec3(0, 0, 1.0f));
+        ubo.view = glm::lookAt(glm::vec3(0.0, -2.0f, -2.0f), glm::vec3(0, 0, 0), glm::vec3(0, 1.0f, 0.0f));
+        ubo.proj = glm::perspective(glm::radians(45.0f), static_cast<float>(actualExtent.width/actualExtent.height), 0.1f, 10.0f);
+        ubo.proj[1][1] *= -1;
+        
+        void* data = gpu.mapMemory(uboMem[currImg], 0, sizeof(ubo));
+        memcpy(data, &ubo, sizeof(ubo));
+        gpu.unmapMemory(uboMem[currImg]);
+        ++rotateAngle;
+}
 
 void drawFrame()
 {  
@@ -615,6 +701,8 @@ void drawFrame()
         gpu.resetFences(cpuSyncFN[currentFrame]);
         
         auto fbIndex = gpu.acquireNextImageKHR(swapChain, std::numeric_limits<uint64_t>::max(), imgAvlblSMPH[currentFrame], nullptr);
+        
+        updateUniformData(fbIndex.value);
     
         vk::PipelineStageFlags waitAt[] = {vk::PipelineStageFlagBits::eColorAttachmentOutput};
         vk::SubmitInfo si(1, &imgAvlblSMPH[currentFrame], waitAt, 1, &commandBuffers[fbIndex.value],1, &renderFinishSMPH[currentFrame]);
@@ -656,10 +744,14 @@ int main(int argc, char **argv) {
     window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan window", nullptr, nullptr);
     VulkanStuff(); 
     createRenderPass();
+    createDescriptorSetLayout();
     createPipeline();
     createFrameBuffers();
     createVertexBuffer();
     createIndexBuffer();
+    createUniformBuffers();
+    createDescriptorPool();
+    createDescriptorSets();
     createCommandBuffers();
     createSemaphores();
         
@@ -680,6 +772,13 @@ int main(int argc, char **argv) {
 
     gpu.waitIdle();
     cleanUpSwapChain();
+    gpu.destroy(descSetLayout);
+    gpu.destroy(descPool);
+    for (int i = 0; i < uniformBuffer.size(); ++i)
+    {
+        gpu.destroy(uniformBuffer[i]);
+        gpu.freeMemory(uboMem[i]);
+    }
     gpu.destroy(VBO);
     gpu.destroy(IndicesBuffer);
     gpu.freeMemory(devMem);
