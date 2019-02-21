@@ -96,7 +96,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback( VkDebugUtilsMessageSeverity
 }
 
 struct Vertex {
-    glm::vec2 pos;
+    glm::vec3 pos;
     glm::vec3 color;
     glm::vec2 uv;
     
@@ -110,7 +110,7 @@ struct Vertex {
     
     attributeDescriptions[0].binding = 0;
     attributeDescriptions[0].location = 0;
-    attributeDescriptions[0].format = vk::Format::eR32G32Sfloat;
+    attributeDescriptions[0].format = vk::Format::eR32G32B32Sfloat;
     attributeDescriptions[0].offset = offsetof(Vertex, pos);
     
     attributeDescriptions[1].binding = 0;
@@ -134,14 +134,19 @@ struct UniformBufferObject {
 };
 
 const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f}, {1.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}},
-    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}}, 
-    {{0.5f, -0.5f}, {1.0f, 1.0f, 0.0f}, {1.0f, 0.0f}} 
+    {{-0.5f, -0.5f, 0.0f}, {1.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}},
+    {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}}, 
+    {{0.5f, -0.5f, 0.0f}, {1.0f, 1.0f, 0.0f}, {1.0f, 0.0f}}, 
+    
+    {{-0.5f, -0.5f, -0.4f}, {1.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f, -0.4f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}},
+    {{-0.5f, 0.5f, -0.4f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}}, 
+    {{0.5f, -0.5f, -0.4f}, {1.0f, 1.0f, 0.0f}, {1.0f, 0.0f}} 
 };
 
 const std::vector<uint16_t> indices = {
-  0, 1, 2, 0, 3, 1
+  0, 1, 2, 0, 3, 1, 4, 5, 6, 4, 7, 5
 };
 
 std::vector<char> loadFileToMem(const std::string& filename)
