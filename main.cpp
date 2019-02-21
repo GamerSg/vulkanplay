@@ -8,6 +8,9 @@
 #include <glm/mat4x4.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 #include <chrono>
 #include <bitset>
 #include <iostream>
@@ -39,6 +42,12 @@ vk::Buffer VBO;
 vk::DeviceMemory devMem;
 vk::Buffer IndicesBuffer;
 vk::DeviceMemory indMem;
+vk::Image texture;
+vk::DeviceMemory texMem;
+
+vk::ImageView texImgView;
+vk::Sampler texSampler;
+
 // Multiple for each frame
 std::vector<vk::Buffer> uniformBuffer;
 std::vector<vk::DeviceMemory> uboMem;
@@ -89,14 +98,15 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback( VkDebugUtilsMessageSeverity
 struct Vertex {
     glm::vec2 pos;
     glm::vec3 color;
+    glm::vec2 uv;
     
     static vk::VertexInputBindingDescription getBindingDescription() {
         vk::VertexInputBindingDescription bindingDescription(0, sizeof(Vertex), vk::VertexInputRate::eVertex);     
 
         return bindingDescription;
     }
-    static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions() {
-    std::array<vk::VertexInputAttributeDescription, 2> attributeDescriptions = {};
+    static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDescriptions() {
+    std::array<vk::VertexInputAttributeDescription, 3> attributeDescriptions = {};
     
     attributeDescriptions[0].binding = 0;
     attributeDescriptions[0].location = 0;
@@ -107,6 +117,11 @@ struct Vertex {
     attributeDescriptions[1].location = 1;
     attributeDescriptions[1].format = vk::Format::eR32G32B32Sfloat;
     attributeDescriptions[1].offset = offsetof(Vertex, color);
+    
+    attributeDescriptions[2].binding = 0;
+    attributeDescriptions[2].location = 2;
+    attributeDescriptions[2].format = vk::Format::eR32G32Sfloat;
+    attributeDescriptions[2].offset = offsetof(Vertex, uv);
 
     return attributeDescriptions;
     }
@@ -119,10 +134,10 @@ struct UniformBufferObject {
 };
 
 const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f}, {1.0f, 1.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}, 
-    {{0.5f, -0.5f}, {1.0f, 1.0f, 0.0f}} 
+    {{-0.5f, -0.5f}, {1.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}},
+    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}}, 
+    {{0.5f, -0.5f}, {1.0f, 1.0f, 0.0f}, {1.0f, 0.0f}} 
 };
 
 const std::vector<uint16_t> indices = {
@@ -193,7 +208,8 @@ void createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPro
   
 }
 
-void copyBuffer(vk::Buffer src,  vk::Buffer dst,  vk::DeviceSize size)
+
+vk::CommandBuffer beginSingleTimeCommands()
 {
     vk::CommandBufferAllocateInfo cbai(commandPool, vk::CommandBufferLevel::ePrimary, 1);    
     std::vector<vk::CommandBuffer> transferCmdBuffers = gpu.allocateCommandBuffers(cbai);
@@ -201,21 +217,135 @@ void copyBuffer(vk::Buffer src,  vk::Buffer dst,  vk::DeviceSize size)
     
     vk::CommandBufferBeginInfo cbbi(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
     transferCmdBuffer.begin(cbbi);
-    vk::BufferCopy bc(0, 0, size);    
-    std::array<vk::BufferCopy, 1> bcRegions=  {bc};
-    transferCmdBuffer.copyBuffer(src, dst, bcRegions);
-    transferCmdBuffer.end();
-    
+    return transferCmdBuffer;
+}
+
+void endSingleTimeCommands(vk::CommandBuffer buff)
+{
+    buff.end();
     vk::SubmitInfo si;
     si.setCommandBufferCount(1);
-    si.setPCommandBuffers(&transferCmdBuffer);
+    si.setPCommandBuffers(&buff);
     std::array<vk::SubmitInfo, 1> siArr = {si};
     graphicsQueue.submit(siArr, nullptr);
-    graphicsQueue.waitIdle();
-    gpu.freeCommandBuffers(commandPool, 1, &transferCmdBuffer);    
+    graphicsQueue.waitIdle();                               // BAD,  needs to be reworked
+    gpu.freeCommandBuffers(commandPool, 1, &buff);    
+}
+
+
+void copyBuffer(vk::Buffer src,  vk::Buffer dst,  vk::DeviceSize size)
+{
+    vk::CommandBuffer cb = beginSingleTimeCommands();
+    
+    vk::BufferCopy bc(0, 0, size);    
+    std::array<vk::BufferCopy, 1> bcRegions=  {bc};
+    cb.copyBuffer(src, dst, bcRegions);
+    
+    endSingleTimeCommands(cb); 
+}
+
+void copyBufferToImage(vk::Buffer src,  vk::Image img,  uint32_t width,  uint32_t height)
+{
+    vk::CommandBuffer cb = beginSingleTimeCommands();
+    vk::ImageSubresourceLayers isl(vk::ImageAspectFlagBits::eColor, 0, 0, 1);
+    vk::BufferImageCopy bic(0, 0, 0, isl, vk::Offset3D(0, 0, 0), vk::Extent3D(width,height, 1));
+    std::array <vk::BufferImageCopy, 1> bicArr = {bic};
+    cb.copyBufferToImage(src, img, vk::ImageLayout::eTransferDstOptimal, bic);
+    endSingleTimeCommands(cb);
+}
+
+void transitionImageLayout(vk::Image img,  vk::Format fmt,  vk::ImageLayout oldLayout,  vk::ImageLayout newLayout)
+{
+    vk::PipelineStageFlags srcStage,  dstStage;
+    vk::CommandBuffer cb = beginSingleTimeCommands();
+    vk::ImageMemoryBarrier imb(vk::AccessFlagBits::eTransferWrite, vk::AccessFlagBits::eMemoryRead, oldLayout, newLayout, VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, img, vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+    
+    if (oldLayout ==  vk::ImageLayout::eUndefined && newLayout ==  vk::ImageLayout::eTransferDstOptimal)
+    {
+        srcStage = vk::PipelineStageFlagBits::eTopOfPipe;
+        dstStage = vk::PipelineStageFlagBits::eTransfer;
+        imb.setSrcAccessMask({});                           //Doesnt really matter what we set because srcStage is TOP of Pipe,  ie. nothing to wait for
+        imb.setDstAccessMask(vk::AccessFlagBits::eTransferWrite);
+    }
+    else if (oldLayout ==  vk::ImageLayout::eTransferDstOptimal && newLayout ==  vk::ImageLayout::eShaderReadOnlyOptimal)
+    {  // Ensure Transfer is over before Fragment Shader can begin
+        srcStage = vk::PipelineStageFlagBits::eTransfer;
+        dstStage = vk::PipelineStageFlagBits::eFragmentShader;
+        imb.setSrcAccessMask(vk::AccessFlagBits::eTransferWrite);     
+        imb.setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+    }
+    
+    std::array <vk::ImageMemoryBarrier, 1> imbArr = {imb};
+    cb.pipelineBarrier(srcStage, dstStage, vk::DependencyFlagBits::eByRegion, nullptr, nullptr, imbArr);
+    
+    
+    endSingleTimeCommands(cb);
     
 }
 
+void createImage(uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling,  vk::ImageUsageFlags usage, vk::MemoryPropertyFlags props, vk::Image& img,  vk::DeviceMemory& devM)
+{
+    vk::ImageCreateInfo ici(vk::ImageCreateFlags(), vk::ImageType::e2D, format, vk::Extent3D(width, height, 1), 1, 1, vk::SampleCountFlagBits::e1, tiling, usage, vk::SharingMode::eExclusive );
+    
+    texture = gpu.createImage(ici);
+    
+    vk::MemoryRequirements memReq;
+    memReq = gpu.getImageMemoryRequirements(texture);
+    vk::MemoryAllocateInfo mai( memReq.size, findMemoryType(memReq.memoryTypeBits, props) );
+    texMem = gpu.allocateMemory(mai);
+    gpu.bindImageMemory(texture, texMem, 0);
+}
+
+void createTextureImage()
+{
+    int texW, texH, texCH;
+    stbi_uc* data = stbi_load("./textures/texture.png", &texW, &texH, &texCH, STBI_rgb_alpha);
+    
+    vk::DeviceSize imgSize = texW * texH * 4;               // 4 channels,  rgba
+    
+    vk::Buffer stagingBuffer;
+    vk::DeviceMemory stagingMem;
+    
+    createBuffer(imgSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible |  vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer, stagingMem);
+    void* dat = gpu.mapMemory(stagingMem, 0, imgSize);  
+    memcpy(dat, data, imgSize);
+    gpu.unmapMemory(stagingMem);
+    stbi_image_free(data);
+    
+    createImage(texW, texH, vk::Format::eR8G8B8A8Unorm, vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eSampled |  vk::ImageUsageFlagBits::eTransferDst, vk::MemoryPropertyFlagBits::eDeviceLocal, texture, texMem);
+      
+    transitionImageLayout(texture, vk::Format::eR8G8B8A8Unorm, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+    copyBufferToImage(stagingBuffer, texture, texW, texH);
+    transitionImageLayout(texture, vk::Format::eR8G8B8A8Unorm, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+    
+    gpu.destroy(stagingBuffer);
+    gpu.freeMemory(stagingMem);
+    
+}
+
+void createTextureSampler()
+{
+    vk::SamplerCreateInfo sci(vk::SamplerCreateFlags(), vk::Filter::eLinear, vk::Filter::eLinear, vk::SamplerMipmapMode::eLinear, vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat, vk::SamplerAddressMode::eRepeat, 0, 1, 16.0f, 0, vk::CompareOp::eNever, 0, 0);
+    texSampler = gpu.createSampler(sci);
+}
+
+vk::ImageView createImageView(vk::Image img,  vk::Format format)
+{
+    vk::ImageViewCreateInfo ivci;
+    ivci.flags = vk::ImageViewCreateFlags();
+    ivci.image = img;
+    ivci.viewType = vk::ImageViewType::e2D;
+    ivci.format = format;
+    ivci.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
+    ivci.subresourceRange.levelCount = 1;
+    ivci.subresourceRange.layerCount = 1;
+    return gpu.createImageView(ivci);
+}
+
+void createTextureImageView()
+{
+    texImgView = createImageView(texture, vk::Format::eR8G8B8A8Unorm);
+}
 
 void createUniformBuffers()
 {
@@ -267,10 +397,15 @@ void createIndexBuffer()
 
 void createDescriptorSetLayout()
 {
+    // Stuff we are passing to the shader
     vk::DescriptorSetLayoutBinding dslb(0, vk::DescriptorType::eUniformBuffer, 1, vk::ShaderStageFlagBits::eVertex);
+    vk::DescriptorSetLayoutBinding dslb2(1, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment);
+    
+    std::array<vk::DescriptorSetLayoutBinding, 2> dslbArr = {dslb, dslb2};
+    
     vk::DescriptorSetLayoutCreateInfo dslci;
-    dslci.setBindingCount(1);
-    dslci.setPBindings(&dslb);
+    dslci.setBindingCount(dslbArr.size());
+    dslci.setPBindings(dslbArr.data());
     descSetLayout = gpu.createDescriptorSetLayout(dslci);    
 }
 
@@ -291,7 +426,7 @@ void createPipeline()
     auto vertexInputAttrDesc = Vertex::getAttributeDescriptions();
     visci.setVertexBindingDescriptionCount(1);
     visci.setPVertexBindingDescriptions(&vertexBindingDesc);
-    visci.setVertexAttributeDescriptionCount(2);
+    visci.setVertexAttributeDescriptionCount(vertexInputAttrDesc.size());
     visci.setPVertexAttributeDescriptions(&vertexInputAttrDesc[0]);
     
     // VBO primitive type (almost always triangle list)
@@ -423,17 +558,8 @@ void createSwapChain()
         // Create ImageViews
         swapImgViews.resize(swapImgs.size());
         for ( int i = 0; i < swapImgs.size(); ++i)
-        {
-            swapImgs[i];
-            vk::ImageViewCreateInfo ivci;
-            ivci.flags = vk::ImageViewCreateFlags();
-            ivci.image = swapImgs[i];
-            ivci.viewType = vk::ImageViewType::e2D;
-            ivci.format = sf.format;
-            ivci.subresourceRange.aspectMask = vk::ImageAspectFlagBits::eColor;
-            ivci.subresourceRange.levelCount = 1;
-            ivci.subresourceRange.layerCount = 1;
-            swapImgViews[i] = gpu.createImageView(ivci);
+        {          
+            swapImgViews[i] = createImageView(swapImgs[i], sf.format);
         }
         
 }
@@ -464,7 +590,7 @@ void createCommandBuffers()
     {
         vk::CommandBufferBeginInfo cbbi(vk::CommandBufferUsageFlagBits::eSimultaneousUse);
         commandBuffers[i].begin(cbbi);                      // Begin Recording
-        std::array<float, 4> bgColor = {0.0f, 0.0f, 0.0f, 0.4f};        
+        std::array<float, 4> bgColor = {0.2f, 0.2f, 0.2f, 1.0f};        
         vk::ClearValue cv(bgColor);
         
         vk::RenderPassBeginInfo rpbi(renderPass, frameBuffers[i], scissors, 1, &cv);
@@ -631,7 +757,10 @@ void VulkanStuff()
         assert(presentQueue ==  queueIndex && "Presentation Queue differs from Graphic Queues,  engine currently does not support device");
         float priority = 1.0f;
         vk::DeviceQueueCreateInfo dqci(vk::DeviceQueueCreateFlags(), queueIndex, 1, &priority);
-        vk::DeviceCreateInfo dci(vk::DeviceCreateFlags(), 1,  &dqci, validationLayers.size(), validationLayers.data(), devEXTsNeeded.size(), devEXTsNeeded.data());
+        // Enable Anisotropic filtering for texture undersampling
+        vk::PhysicalDeviceFeatures pdf;
+        pdf.samplerAnisotropy = 1;
+        vk::DeviceCreateInfo dci(vk::DeviceCreateFlags(), 1,  &dqci, validationLayers.size(), validationLayers.data(), devEXTsNeeded.size(), devEXTsNeeded.data(), &pdf);
 
         gpu = device.createDevice(dci);  
         
@@ -650,9 +779,13 @@ void VulkanStuff()
 void createDescriptorPool()
 {
     vk::DescriptorPoolSize dps(vk::DescriptorType::eUniformBuffer, swapImgs.size());
+    vk::DescriptorPoolSize dps2(vk::DescriptorType::eCombinedImageSampler, swapImgs.size());
+    
+    std::array<vk::DescriptorPoolSize, 2> dpsArr = {dps, dps2};
+    
     vk::DescriptorPoolCreateInfo dpci;
-    dpci.setPoolSizeCount(1);
-    dpci.setPPoolSizes(&dps);
+    dpci.setPoolSizeCount(dpsArr.size());
+    dpci.setPPoolSizes(dpsArr.data());
     dpci.setMaxSets(swapImgs.size());
     
     descPool = gpu.createDescriptorPool(dpci);
@@ -669,9 +802,11 @@ void createDescriptorSets()
     
     for (int i = 0; i < descSets.size(); ++i)
     {
-            vk::DescriptorBufferInfo dbi(uniformBuffer[i], 0,  sizeof(UniformBufferObject));
+            vk::DescriptorBufferInfo dbi(uniformBuffer[i], 0,  sizeof(UniformBufferObject));            
             vk::WriteDescriptorSet wds(descSets[i], 0, 0, 1, vk::DescriptorType::eUniformBuffer, nullptr, &dbi, nullptr);
-            std::array<vk::WriteDescriptorSet, 1> writeDescArr=  {wds};
+            vk::DescriptorImageInfo dii(texSampler, texImgView, vk::ImageLayout::eShaderReadOnlyOptimal);
+            vk::WriteDescriptorSet wds2(descSets[i], 1, 0, 1, vk::DescriptorType::eCombinedImageSampler, &dii, nullptr, nullptr);
+            std::array<vk::WriteDescriptorSet, 2> writeDescArr=  {wds, wds2};
             gpu.updateDescriptorSets(writeDescArr, nullptr);
     }
 }
@@ -679,16 +814,17 @@ void createDescriptorSets()
 void updateUniformData(uint32_t currImg)
 {
         UniformBufferObject ubo;
-        static int rotateAngle = 0;
-        ubo.model = glm::rotate(glm::identity<glm::mat4>(), glm::radians(rotateAngle * 0.01f), glm::vec3(0, 0, 1.0f));
+        static auto start = std::chrono::high_resolution_clock::now();
+        auto currentTime = std::chrono::high_resolution_clock::now();
+        float gameTime = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - start).count();
+        ubo.model = glm::rotate(glm::identity<glm::mat4>(), glm::radians(gameTime * 90.0f), glm::vec3(0, 0, 1.0f));
         ubo.view = glm::lookAt(glm::vec3(0.0, -2.0f, -2.0f), glm::vec3(0, 0, 0), glm::vec3(0, 1.0f, 0.0f));
         ubo.proj = glm::perspective(glm::radians(45.0f), static_cast<float>(actualExtent.width/actualExtent.height), 0.1f, 10.0f);
         ubo.proj[1][1] *= -1;
         
         void* data = gpu.mapMemory(uboMem[currImg], 0, sizeof(ubo));
         memcpy(data, &ubo, sizeof(ubo));
-        gpu.unmapMemory(uboMem[currImg]);
-        ++rotateAngle;
+        gpu.unmapMemory(uboMem[currImg]);        
 }
 
 void drawFrame()
@@ -743,6 +879,9 @@ int main(int argc, char **argv) {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan window", nullptr, nullptr);
     VulkanStuff(); 
+    createTextureImage();
+    createTextureImageView();
+    createTextureSampler();
     createRenderPass();
     createDescriptorSetLayout();
     createPipeline();
@@ -781,8 +920,12 @@ int main(int argc, char **argv) {
     }
     gpu.destroy(VBO);
     gpu.destroy(IndicesBuffer);
+    gpu.destroy(texImgView);
+    gpu.destroy(texSampler);
+    gpu.destroy(texture);
     gpu.freeMemory(devMem);
     gpu.freeMemory(indMem);
+    gpu.freeMemory(texMem);
     for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
     {
         gpu.destroy(imgAvlblSMPH[i]);
