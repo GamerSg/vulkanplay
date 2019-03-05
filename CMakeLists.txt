@@ -14,6 +14,8 @@ set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_subdirectory("./dep/glfw")
 #GLM
 include_directories("./dep/glm")
+#STB Image
+include_directories("./dep")
 #Boost
 include_directories(${Boost_INCLUDE_DIRS}) 
 #Link
