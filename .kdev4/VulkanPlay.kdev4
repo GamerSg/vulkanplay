@@ -201,6 +201,28 @@ inclusive=0
 pattern=.hg
 targets=2
 
+[Launch]
+Launch Configurations=Launch Configuration 0
+
+[Launch][Launch Configuration 0]
+Configured Launch Modes=execute
+Configured Launchers=nativeAppLauncher
+Name=vulkanplay
+Type=Native Application
+
+[Launch][Launch Configuration 0][Data]
+Arguments=
+Configured from ProjectItem=VulkanPlay,vulkanplay
+Dependencies=@Variant(\x00\x00\x00\t\x00\x00\x00\x00\x00)
+Dependency Action=Nothing
+EnvironmentGroup=
+Executable=file:///home/luv/Code/VulkanPlay
+External Terminal=konsole --noclose --workdir %workdir -e %exe
+Project Target=VulkanPlay,vulkanplay
+Use External Terminal=false
+Working Directory=file:///home/luv/Code/VulkanPlay
+isExecutable=false
+
 [Project]
 VersionControlSupport=kdevgit
 

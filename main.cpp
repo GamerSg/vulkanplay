@@ -191,7 +191,7 @@ uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)
     
     for (uint32_t i = 0; i < pdmp.memoryTypeCount; i++) 
     {
-        if ((typeFilter & (1 << i)) && (pdmp.memoryTypes[i].propertyFlags & properties) & properties) 
+        if ((typeFilter & (1 << i)) && (pdmp.memoryTypes[i].propertyFlags & properties) == properties) 
         {
             std::cout << "Found " << i << " " << std::bitset<16>(1 << i) << std::endl;
             return i;
@@ -766,7 +766,7 @@ void recreateSwapChain()
     gpu.waitIdle();
     
     cleanUpSwapChain();
-    
+    gpu.resetCommandPool(commandPool, vk::CommandPoolResetFlagBits::eReleaseResources);
     createSwapChain();
     createRenderPass();
     createPipeline();
