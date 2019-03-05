@@ -510,14 +510,17 @@ void VulkanStuff()
 
         queueIndex = 0;
         presentQueue = 0;
-        unsigned int i = 0;
+        
         for( auto& dev : physicalDevices)
         {        
-            std::cout << dev.getProperties().deviceName << std::endl;            
+            std::cout << "-----------------------" << std::endl;
+            std::cout << dev.getProperties().deviceName << std::endl;
+            std::cout << "-----------------------" << std::endl;            
             std::cout << vk::to_string(dev.getProperties().deviceType) << std::endl;
             std::cout << VK_VERSION_MAJOR(dev.getProperties().driverVersion)<<"."<<VK_VERSION_MINOR(dev.getProperties().driverVersion) << std::endl;
             std::cout << VK_VERSION_MAJOR(dev.getProperties().apiVersion)<<"."<<VK_VERSION_MINOR(dev.getProperties().apiVersion) <<"."<<VK_VERSION_PATCH(dev.getProperties().apiVersion)<< std::endl;    
 
+            unsigned int i = 0;
             // Get Queues
             std::vector<vk::QueueFamilyProperties> familyProperties = dev.getQueueFamilyProperties();
             for (auto& prop : familyProperties)
@@ -558,7 +561,7 @@ void VulkanStuff()
             }
            
         }
-        assert(presentQueue ==  queueIndex && "Presentation Queue differs from Graphic Queues,  engine currently does not support device");
+        //assert(presentQueue ==  queueIndex && "Presentation Queue differs from Graphic Queues,  engine currently does not support device");
         float priority = 1.0f;
         vk::DeviceQueueCreateInfo dqci(vk::DeviceQueueCreateFlags(), queueIndex, 1, &priority);
         vk::DeviceCreateInfo dci(vk::DeviceCreateFlags(), 1,  &dqci, validationLayers.size(), validationLayers.data(), devEXTsNeeded.size(), devEXTsNeeded.data());
